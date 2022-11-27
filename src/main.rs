@@ -7,6 +7,8 @@ fn main() {
     // equation.solve();
     // let mut equation = Equation::new("3 + 4 * 2 / (1 - 5) ^ 2 ^ 3".to_string());
     // equation.solve();
-    let mut equation = Equation::new("-(5*2) = -(1 + 9)".to_string());
+    // let mut equation = Equation::new("-(5*2) = -(1 + 9)".to_string());
+    // equation.solve();
+    let mut equation = Equation::new("sqrt(1 + 2)".to_string());
     equation.solve();
 }
