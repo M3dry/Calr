@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    iter::Peekable,
-};
+use std::{collections::HashMap, iter::Peekable};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum Functions {
@@ -96,7 +93,7 @@ impl Tokens {
                             }
                         } else if c.is_ascii_alphabetic() {
                             cur.1.push(chars.next().unwrap())
-                        } else if c == &'(' || c == &' ' {
+                        } else {
                             let func_str = (&cur.1).into_iter().collect::<String>();
                             let func = match &functions {
                                 Some(functions) => match functions.get(&func_str) {
@@ -117,6 +114,7 @@ impl Tokens {
                             if let Some(func) = func {
                                 if !identifier.is_empty() {
                                     symbols.push(Tokens::Identifier(identifier));
+                                    symbols.push(Tokens::Multiply);
                                 }
                                 if cur.0 != 1 {
                                     symbols.push(Tokens::Identifier(vec![(cur.0, vec![])]));
@@ -126,8 +124,6 @@ impl Tokens {
 
                                 continue 'l;
                             }
-                            break;
-                        } else {
                             break;
                         }
                     }
@@ -188,8 +184,7 @@ impl Tokens {
 #[derive(Debug, PartialEq, Eq)]
 struct SyntaxTree {
     value: Tokens,
-    left: Option<Box<SyntaxTree>>,
-    right: Option<Box<SyntaxTree>>,
+    nodes: Vec<Self>,
 }
 
 impl SyntaxTree {
@@ -200,36 +195,36 @@ impl SyntaxTree {
     fn new(value: Tokens) -> Self {
         SyntaxTree {
             value,
-            left: None,
-            right: None,
+            nodes: vec![],
         }
     }
 
-    fn left(mut self, left: Option<SyntaxTree>) -> Self {
-        self.left = if let Some(left) = left {
-            Some(Box::new(left))
-        } else {
-            None
-        };
+    fn nodes(mut self, nodes: Vec<SyntaxTree>) -> Self {
+        self.nodes = nodes;
         self
     }
 
-    fn right(mut self, right: Option<SyntaxTree>) -> Self {
-        self.right = if let Some(right) = right {
-            Some(Box::new(right))
-        } else {
-            None
-        };
+    fn node(mut self, node: SyntaxTree) -> Self {
+        self.nodes = vec![node];
         self
+    }
+
+    fn push_node(&mut self, node: SyntaxTree) {
+        self.nodes.push(node);
+    }
+
+    fn pop_node(&mut self) {
+        self.nodes.pop();
     }
 }
 
-struct Parser<T: Iterator<Item = Tokens>> {
+#[derive(Debug)]
+struct Parser<T: Iterator<Item = Tokens> + std::fmt::Debug> {
     iterator: Peekable<T>,
 }
 
-impl<T: Iterator<Item = Tokens>> Parser<T> {
-    // New Grammar:
+impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
+    // Grammar:
     // start      -> EXP | EXP = EXP
     // EXP        -> TERM1 T1
     // TERM1      -> TERM2 T2
@@ -237,70 +232,78 @@ impl<T: Iterator<Item = Tokens>> Parser<T> {
     // T1         -> OP1 TERM1 T1 | epsilon
     // T2         -> OP2 TERM2 T2 | epsilon
     // T3         -> OP3 PREUNARY T3 | epsilon
-    // FUNCTION   -> OPFUNC? PREUNARY
+    // FUNCTION   -> OPFUNC PARENS | PREUNARY
     // PREUNARY   -> PARENS | OPBEUNARY PARENS
-    // PARENS     -> (number | ParenOpen EXP ParenClose) OPAFUNARY?
+    // PARENS     -> (number | ParenOpen EXP{, EXP}? ParenClose) OPAFUNARY?
     // OP1        -> + | -
     // OP2        -> * | / | %
     // OP3        -> ^
     // OPBEUNARY -> + | -
     // OPAFUNARY -> !
+    // OPFUNC    -> functions eg. sqrt
     fn parse(tokens: Vec<Tokens>) -> SyntaxTree {
         let mut tokens = Parser {
             iterator: tokens.into_iter().peekable(),
         };
         let value = tokens.exp();
+        let peek = tokens.peek();
 
-        if tokens.iterator.peek() == None {
+        if peek == None {
             value
-        } else if tokens.iterator.peek() == Some(&Tokens::Equals) {
-            SyntaxTree::new(tokens.iterator.next().unwrap())
-                .left(Some(value))
-                .right(Some(tokens.exp()))
+        } else if peek == Some(&Tokens::Equals) {
+            SyntaxTree::new(tokens.next().unwrap()).nodes(vec![value, tokens.exp()])
         } else {
-            panic!("Shit bad")
+            panic!("Something went wrong got {peek:#?}")
         }
     }
 
     fn exp(&mut self) -> SyntaxTree {
-        if matches!(self.iterator.peek(), Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        let peek = self.peek();
+
+        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
         {
             let term1 = self.term1();
             self.t1(term1)
         } else {
-            panic!("Expected PrefixUnary or Identifier or ParenOpen")
+            panic!("Expected PrefixUnary or Identifier or ParenOpen {peek:#?}")
         }
     }
 
     fn term1(&mut self) -> SyntaxTree {
-        if matches!(self.iterator.peek(), Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        let peek = self.peek();
+
+        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
         {
             let term2 = self.term2();
             self.t2(term2)
         } else {
-            panic!("Expected PrefixUnary or Identifier or ParenOpen")
+            panic!("Expected PrefixUnary or Identifier or ParenOpen {peek:#?}")
         }
     }
 
     fn term2(&mut self) -> SyntaxTree {
-        if matches!(self.iterator.peek(), Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        let peek = self.peek();
+
+        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
         {
             let function = self.function();
             self.t3(function)
         } else {
-            panic!("Expected PrefixUnary or Identifier or ParenOpen")
+            panic!("Expected PrefixUnary or Identifier or ParenOpen {peek:#?}")
         }
     }
 
     fn t1(&mut self, prev: SyntaxTree) -> SyntaxTree {
-        if matches!(self.iterator.peek(), Some(token) if token.op_level() == 1) {
-            let op = self.iterator.next().unwrap();
-            if matches!(self.iterator.peek(), Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        if matches!(self.peek(), Some(token) if token.op_level() == 1) {
+            let op = self.next().unwrap();
+            let peek = self.peek();
+
+            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
             {
                 let term1 = self.term1();
-                self.t1(SyntaxTree::new(op).left(Some(prev)).right(Some(term1)))
+                self.t1(SyntaxTree::new(op).nodes(vec![prev, term1]))
             } else {
-                panic!("Expected PrefixUnary or Identifier or ParenOpen")
+                panic!("Expected PrefixUnary or Identifier or ParenOpen {peek:#?}")
             }
         } else {
             prev
@@ -308,14 +311,16 @@ impl<T: Iterator<Item = Tokens>> Parser<T> {
     }
 
     fn t2(&mut self, prev: SyntaxTree) -> SyntaxTree {
-        if matches!(self.iterator.peek(), Some(token) if token.op_level() == 2) {
-            let op = self.iterator.next().unwrap();
-            if matches!(self.iterator.peek(), Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        if matches!(self.peek(), Some(token) if token.op_level() == 2) {
+            let op = self.next().unwrap();
+            let peek = self.peek();
+
+            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
             {
                 let term2 = self.term2();
-                self.t2(SyntaxTree::new(op).left(Some(prev)).right(Some(term2)))
+                self.t2(SyntaxTree::new(op).nodes(vec![prev, term2]))
             } else {
-                panic!("Expected PrefixUnary or Identifier or ParenOpen")
+                panic!("Expected PrefixUnary or Identifier or ParenOpen {peek:#?}")
             }
         } else {
             prev
@@ -323,14 +328,16 @@ impl<T: Iterator<Item = Tokens>> Parser<T> {
     }
 
     fn t3(&mut self, prev: SyntaxTree) -> SyntaxTree {
-        if matches!(self.iterator.peek(), Some(token) if token.op_level() == 3) {
-            let op = self.iterator.next().unwrap();
-            if matches!(self.iterator.peek(), Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        if matches!(self.peek(), Some(token) if token.op_level() == 3) {
+            let op = self.next().unwrap();
+            let peek = self.peek();
+
+            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
             {
                 let pre_unary = self.pre_unary();
-                self.t3(SyntaxTree::new(op).left(Some(prev)).right(Some(pre_unary)))
+                self.t3(SyntaxTree::new(op).nodes(vec![prev, pre_unary]))
             } else {
-                panic!("Expected PrefixUnary or Identifier or ParenOpen")
+                panic!("Expected PrefixUnary or Identifier or ParenOpen got {peek:#?}")
             }
         } else {
             prev
@@ -338,55 +345,69 @@ impl<T: Iterator<Item = Tokens>> Parser<T> {
     }
 
     fn function(&mut self) -> SyntaxTree {
-        if matches!(self.iterator.peek(), Some(Tokens::Function(_))) {
-            SyntaxTree::new(self.iterator.next().unwrap()).left(Some(self.pre_unary()))
-        } else if matches!(self.iterator.peek(), Some(token) if token.is_prefix_unary() || matches!(token, Tokens::ParenOpen | Tokens::Identifier(_)))
+        let peek = self.peek();
+
+        if matches!(peek, Some(Tokens::Function(_))) {
+            SyntaxTree::new(self.next().unwrap()).nodes(self.parens())
+        } else if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::ParenOpen | Tokens::Identifier(_)))
         {
             self.pre_unary()
         } else {
-            panic!(
-                "Expected Function or PrefixUnary or Identifier or ParenOpen got {:#?}",
-                self.iterator.peek()
-            )
+            panic!("Expected Function or PrefixUnary or Identifier or ParenOpen got {peek:#?}",)
         }
     }
 
     fn pre_unary(&mut self) -> SyntaxTree {
-        if matches!(
-            self.iterator.peek(),
-            Some(Tokens::Identifier(_) | Tokens::ParenOpen)
-        ) {
-            self.parens()
-        } else if matches!(self.iterator.peek(), Some(token) if token.is_prefix_unary()) {
-            SyntaxTree::new(self.iterator.next().unwrap()).left(Some(self.parens()))
+        let peek = self.peek();
+
+        if matches!(peek, Some(Tokens::Identifier(_) | Tokens::ParenOpen)) {
+            self.parens().into_iter().next().unwrap()
+        } else if matches!(peek, Some(token) if token.is_prefix_unary()) {
+            SyntaxTree::new(self.next().unwrap()).nodes(self.parens())
         } else {
-            panic!(
-                "Expected PrefixUnary or Identifier or ParenOpen got {:#?}",
-                self.iterator.peek()
-            )
+            panic!("Expected PrefixUnary or Identifier or ParenOpen got {peek:#?}",)
         }
     }
 
-    fn parens(&mut self) -> SyntaxTree {
-        let token = if matches!(self.iterator.peek(), Some(Tokens::Identifier(_))) {
-            SyntaxTree::new(self.iterator.next().unwrap())
-        } else if matches!(self.iterator.peek(), Some(Tokens::ParenOpen)) {
-            self.iterator.next();
-            let value = self.exp();
-            if self.iterator.next() == Some(Tokens::ParenClose) {
+    fn parens(&mut self) -> Vec<SyntaxTree> {
+        let peek = self.peek();
+
+        let token = if matches!(peek, Some(Tokens::Identifier(_))) {
+            vec![SyntaxTree::new(self.next().unwrap())]
+        } else if matches!(peek, Some(Tokens::ParenOpen)) {
+            self.next();
+            let mut value = vec![self.exp()];
+
+            while let Some(&Tokens::ArgsSeparator) = self.peek() {
+                self.next();
+                value.push(self.exp());
+            }
+
+            let peek = self.peek();
+
+            if peek == Some(&Tokens::ParenClose) {
+                self.next();
                 value
             } else {
-                panic!("Expected ParenOpen")
+                panic!("Expected ParenOpen got {peek:#?}")
             }
         } else {
-            panic!("Expected Identifier or ParenOpen")
+            panic!("Expected Identifier or ParenOpen got {peek:#?}",)
         };
 
-        if matches!(self.iterator.peek(), Some(token) if token.is_postfix_unary()) {
-            SyntaxTree::new(self.iterator.next().unwrap()).left(Some(token))
+        if matches!(self.peek(), Some(token) if token.is_postfix_unary()) {
+            vec![SyntaxTree::new(self.next().unwrap()).nodes(token)]
         } else {
             token
         }
+    }
+
+    fn peek(&mut self) -> Option<&Tokens> {
+        self.iterator.peek()
+    }
+
+    fn next(&mut self) -> Option<Tokens> {
+        self.iterator.next()
     }
 }
 

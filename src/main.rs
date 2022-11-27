@@ -9,6 +9,8 @@ fn main() {
     // equation.solve();
     // let mut equation = Equation::new("-(5*2) = -(1 + 9)".to_string());
     // equation.solve();
-    let mut equation = Equation::new("sqrt(1 + 2)".to_string());
-    equation.solve();
+    // let mut equation = Equation::new("3xy5root(25, 2) = 3xy5root(25, 2)".to_string());
+    // equation.solve();
+
+    Equation::new(std::env::args().collect::<Vec<String>>().into_iter().nth(1).unwrap()).solve()
 }
