@@ -3,15 +3,16 @@ use std::{collections::HashMap, iter::Peekable};
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum Functions {
     Sqrt,
-    Cbrt, // Doesn't work rn
+    Cbrt,
     Root,
+    Log,
     Custom((String, usize)),
 }
 
 impl Functions {
     fn get_args(&self) -> usize {
         match self {
-            Functions::Root => 2,
+            Functions::Root | Functions::Log => 2,
             Functions::Sqrt | Functions::Cbrt => 1,
             Functions::Custom((_, num)) => *num,
         }
@@ -22,6 +23,7 @@ impl Functions {
             "sqrt" => Some(Functions::Sqrt),
             "cbrt" => Some(Functions::Cbrt),
             "root" => Some(Functions::Root),
+            "log" => Some(Functions::Log),
             _ => None,
         }
     }
@@ -43,7 +45,8 @@ enum Tokens {
     ParenOpen,
     ParenClose,
     Equals,
-    Identifier(Vec<(u128, Vec<char>)>),
+    Number(u128),
+    Var(char),
 }
 
 impl Tokens {
@@ -75,7 +78,6 @@ impl Tokens {
                 '=' => Tokens::Equals,
                 ',' => Tokens::ArgsSeparator,
                 c if c.is_ascii_alphanumeric() => {
-                    let mut identifier: Vec<(u128, Vec<char>)> = vec![];
                     let mut cur: (u128, Vec<char>) = if c.is_digit(10) {
                         (c.to_digit(10).unwrap() as u128, vec![])
                     } else {
@@ -85,13 +87,21 @@ impl Tokens {
                     while let Some(c) = chars.peek() {
                         if c.is_ascii_digit() {
                             if !cur.1.is_empty() {
-                                identifier.push(cur);
+                                for c in cur.1 {
+                                    symbols.push(Tokens::Var(c));
+                                    symbols.push(Tokens::Multiply);
+                                }
                                 cur = (chars.next().unwrap().to_digit(10).unwrap() as u128, vec![]);
                             } else {
                                 cur.0 = cur.0 * 10
                                     + chars.next().unwrap().to_digit(10).unwrap() as u128;
                             }
                         } else if c.is_ascii_alphabetic() {
+                            if cur.0 != 1 {
+                                symbols.push(Tokens::Number(cur.0));
+                                symbols.push(Tokens::Multiply);
+                                cur.0 = 1;
+                            }
                             cur.1.push(chars.next().unwrap())
                         } else {
                             let func_str = (&cur.1).into_iter().collect::<String>();
@@ -112,14 +122,6 @@ impl Tokens {
                             };
 
                             if let Some(func) = func {
-                                if !identifier.is_empty() {
-                                    symbols.push(Tokens::Identifier(identifier));
-                                    symbols.push(Tokens::Multiply);
-                                }
-                                if cur.0 != 1 {
-                                    symbols.push(Tokens::Identifier(vec![(cur.0, vec![])]));
-                                    symbols.push(Tokens::Multiply)
-                                }
                                 symbols.push(func);
 
                                 continue 'l;
@@ -128,9 +130,17 @@ impl Tokens {
                         }
                     }
 
-                    identifier.push(cur);
+                    if cur.0 != 1 {
+                        symbols.push(Tokens::Number(cur.0));
+                    } else if !cur.1.is_empty() {
+                        for c in cur.1 {
+                            symbols.push(Tokens::Var(c));
+                            symbols.push(Tokens::Multiply);
+                        }
+                        symbols.pop();
+                    }
 
-                    Tokens::Identifier(identifier)
+                    continue;
                 }
                 _ => continue,
             };
@@ -182,7 +192,7 @@ impl Tokens {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct SyntaxTree {
+pub struct SyntaxTree {
     value: Tokens,
     nodes: Vec<Self>,
 }
@@ -238,9 +248,9 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
     // OP1        -> + | -
     // OP2        -> * | / | %
     // OP3        -> ^
-    // OPBEUNARY -> + | -
-    // OPAFUNARY -> !
-    // OPFUNC    -> functions eg. sqrt
+    // OPBEUNARY  -> + | -
+    // OPAFUNARY  -> !
+    // OPFUNC     -> functions eg. sqrt
     fn parse(tokens: Vec<Tokens>) -> SyntaxTree {
         let mut tokens = Parser {
             iterator: tokens.into_iter().peekable(),
@@ -260,36 +270,36 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
     fn exp(&mut self) -> SyntaxTree {
         let peek = self.peek();
 
-        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
         {
             let term1 = self.term1();
             self.t1(term1)
         } else {
-            panic!("Expected PrefixUnary or Identifier or ParenOpen {peek:#?}")
+            panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
         }
     }
 
     fn term1(&mut self) -> SyntaxTree {
         let peek = self.peek();
 
-        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
         {
             let term2 = self.term2();
             self.t2(term2)
         } else {
-            panic!("Expected PrefixUnary or Identifier or ParenOpen {peek:#?}")
+            panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
         }
     }
 
     fn term2(&mut self) -> SyntaxTree {
         let peek = self.peek();
 
-        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
         {
             let function = self.function();
             self.t3(function)
         } else {
-            panic!("Expected PrefixUnary or Identifier or ParenOpen {peek:#?}")
+            panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
         }
     }
 
@@ -298,12 +308,12 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
             let op = self.next().unwrap();
             let peek = self.peek();
 
-            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
             {
                 let term1 = self.term1();
                 self.t1(SyntaxTree::new(op).nodes(vec![prev, term1]))
             } else {
-                panic!("Expected PrefixUnary or Identifier or ParenOpen {peek:#?}")
+                panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
             }
         } else {
             prev
@@ -315,12 +325,12 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
             let op = self.next().unwrap();
             let peek = self.peek();
 
-            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
             {
                 let term2 = self.term2();
                 self.t2(SyntaxTree::new(op).nodes(vec![prev, term2]))
             } else {
-                panic!("Expected PrefixUnary or Identifier or ParenOpen {peek:#?}")
+                panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
             }
         } else {
             prev
@@ -332,12 +342,12 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
             let op = self.next().unwrap();
             let peek = self.peek();
 
-            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Identifier(_) | Tokens::ParenOpen | Tokens::Function(_)))
+            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
             {
                 let pre_unary = self.pre_unary();
                 self.t3(SyntaxTree::new(op).nodes(vec![prev, pre_unary]))
             } else {
-                panic!("Expected PrefixUnary or Identifier or ParenOpen got {peek:#?}")
+                panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
             }
         } else {
             prev
@@ -349,30 +359,33 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
 
         if matches!(peek, Some(Tokens::Function(_))) {
             SyntaxTree::new(self.next().unwrap()).nodes(self.parens())
-        } else if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::ParenOpen | Tokens::Identifier(_)))
+        } else if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::ParenOpen | Tokens::Number(_) | Tokens::Var(_)))
         {
             self.pre_unary()
         } else {
-            panic!("Expected Function or PrefixUnary or Identifier or ParenOpen got {peek:#?}",)
+            panic!("Expected Function or PrefixUnary or Number or Var or ParenOpen got {peek:#?}",)
         }
     }
 
     fn pre_unary(&mut self) -> SyntaxTree {
         let peek = self.peek();
 
-        if matches!(peek, Some(Tokens::Identifier(_) | Tokens::ParenOpen)) {
+        if matches!(
+            peek,
+            Some(Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen)
+        ) {
             self.parens().into_iter().next().unwrap()
         } else if matches!(peek, Some(token) if token.is_prefix_unary()) {
             SyntaxTree::new(self.next().unwrap()).nodes(self.parens())
         } else {
-            panic!("Expected PrefixUnary or Identifier or ParenOpen got {peek:#?}",)
+            panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}",)
         }
     }
 
     fn parens(&mut self) -> Vec<SyntaxTree> {
         let peek = self.peek();
 
-        let token = if matches!(peek, Some(Tokens::Identifier(_))) {
+        let token = if matches!(peek, Some(Tokens::Number(_) | Tokens::Var(_))) {
             vec![SyntaxTree::new(self.next().unwrap())]
         } else if matches!(peek, Some(Tokens::ParenOpen)) {
             self.next();
@@ -392,7 +405,7 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
                 panic!("Expected ParenOpen got {peek:#?}")
             }
         } else {
-            panic!("Expected Identifier or ParenOpen got {peek:#?}",)
+            panic!("Expected Number or Var or ParenOpen got {peek:#?}",)
         };
 
         if matches!(self.peek(), Some(token) if token.is_postfix_unary()) {
@@ -415,14 +428,22 @@ pub struct Equation {
     input: String,
     ast: SyntaxTree,
     answer: Option<Vec<Tokens>>,
+    vars: Option<HashMap<char, SyntaxTree>>,
+    functions: Option<HashMap<String, (SyntaxTree, usize)>>,
 }
 
 impl Equation {
-    pub fn new(equation: String) -> Equation {
+    pub fn new(
+        equation: String,
+        vars: Option<HashMap<char, SyntaxTree>>,
+        functions: Option<HashMap<String, (SyntaxTree, usize)>>,
+    ) -> Equation {
         Equation {
             ast: SyntaxTree::get(Tokens::tokenize_string(&equation, None)),
             input: equation,
             answer: None,
+            vars,
+            functions,
         }
     }
 
