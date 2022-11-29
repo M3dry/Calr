@@ -6,6 +6,7 @@ enum Functions {
     Cbrt,
     Root,
     Log,
+    Ln,
     Custom((String, usize)),
 }
 
@@ -13,7 +14,7 @@ impl Functions {
     fn get_args(&self) -> usize {
         match self {
             Functions::Root | Functions::Log => 2,
-            Functions::Sqrt | Functions::Cbrt => 1,
+            Functions::Sqrt | Functions::Cbrt | Functions::Ln => 1,
             Functions::Custom((_, num)) => *num,
         }
     }
@@ -24,6 +25,7 @@ impl Functions {
             "cbrt" => Some(Functions::Cbrt),
             "root" => Some(Functions::Root),
             "log" => Some(Functions::Log),
+            "ln" => Some(Functions::Ln),
             _ => None,
         }
     }
@@ -77,67 +79,58 @@ impl Tokens {
                 ')' => Tokens::ParenClose,
                 '=' => Tokens::Equals,
                 ',' => Tokens::ArgsSeparator,
-                c if c.is_ascii_alphanumeric() => {
-                    let mut cur: (u128, Vec<char>) = if c.is_digit(10) {
-                        (c.to_digit(10).unwrap() as u128, vec![])
-                    } else {
-                        (1, vec![c])
-                    };
+                c if c.is_ascii_digit() => {
+                    let mut num = c.to_digit(10).unwrap() as u128;
 
                     while let Some(c) = chars.peek() {
                         if c.is_ascii_digit() {
-                            if !cur.1.is_empty() {
-                                for c in cur.1 {
-                                    symbols.push(Tokens::Var(c));
-                                    symbols.push(Tokens::Multiply);
-                                }
-                                cur = (chars.next().unwrap().to_digit(10).unwrap() as u128, vec![]);
-                            } else {
-                                cur.0 = cur.0 * 10
-                                    + chars.next().unwrap().to_digit(10).unwrap() as u128;
-                            }
+                            num = num * 10 + chars.next().unwrap().to_digit(10).unwrap() as u128;
                         } else if c.is_ascii_alphabetic() {
-                            if cur.0 != 1 {
-                                symbols.push(Tokens::Number(cur.0));
-                                symbols.push(Tokens::Multiply);
-                                cur.0 = 1;
-                            }
-                            cur.1.push(chars.next().unwrap())
+                            symbols.push(Tokens::Number(num));
+                            symbols.push(Tokens::Multiply);
+                            continue 'l;
                         } else {
-                            let func_str = (&cur.1).into_iter().collect::<String>();
-                            let func = match &functions {
-                                Some(functions) => match functions.get(&func_str) {
-                                    Some(len) => Some(Tokens::Function(Functions::Custom((
-                                        func_str.to_string(),
-                                        *len,
-                                    )))),
-                                    None => None,
-                                },
-                                _ => None,
-                            };
-                            let func = match Functions::from_string(&func_str) {
-                                _ if func.is_some() => func,
-                                Some(f) => Some(Tokens::Function(f)),
-                                None => None,
-                            };
-
-                            if let Some(func) = func {
-                                symbols.push(func);
-
-                                continue 'l;
-                            }
                             break;
                         }
                     }
 
-                    if cur.0 != 1 {
-                        symbols.push(Tokens::Number(cur.0));
-                    } else if !cur.1.is_empty() {
-                        for c in cur.1 {
-                            symbols.push(Tokens::Var(c));
-                            symbols.push(Tokens::Multiply);
+                    Tokens::Number(num)
+                }
+                c if c.is_ascii_alphabetic() => {
+                    let mut cs = vec![c];
+
+                    while let Some(c) = chars.peek() {
+                        if c.is_ascii_alphabetic() {
+                            cs.push(chars.next().unwrap());
+                        } else {
+                            break;
                         }
-                        symbols.pop();
+                    }
+
+                    let func_str = cs.iter().collect::<String>();
+                    let func = match &functions {
+                        Some(functions) => match functions.get(&func_str) {
+                            Some(len) => Some(Tokens::Function(Functions::Custom((
+                                func_str.to_string(),
+                                *len,
+                            )))),
+                            None => None,
+                        },
+                        _ => None,
+                    };
+                    let func = match Functions::from_string(&func_str) {
+                        _ if func.is_some() => func,
+                        Some(f) => Some(Tokens::Function(f)),
+                        None => None,
+                    };
+
+                    if let Some(func) = func {
+                        symbols.push(func);
+                    } else {
+                        for c in cs {
+                            symbols.push(Tokens::Multiply);
+                            symbols.push(Tokens::Var(c));
+                        }
                     }
 
                     continue;

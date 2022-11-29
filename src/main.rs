@@ -12,5 +12,6 @@ fn main() {
     // let mut equation = Equation::new("3xy5root(25, 2) = 3xy5root(25, 2)".to_string());
     // equation.solve();
 
-    Equation::new(std::env::args().collect::<Vec<String>>().into_iter().nth(1).unwrap()).solve()
+    Equation::new(std::env::args().collect::<Vec<String>>().into_iter().nth(1).unwrap(), None, None).solve()
+    // Equation::test_tokens(std::env::args().collect::<Vec<String>>().into_iter().nth(1).unwrap())
 }
