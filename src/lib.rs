@@ -1,7 +1,10 @@
-use std::{collections::HashMap, iter::Peekable};
+use std::{
+    collections::{HashMap, HashSet},
+    iter::Peekable,
+};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-enum Functions {
+pub enum Functions {
     Sqrt,
     Cbrt,
     Root,
@@ -11,7 +14,7 @@ enum Functions {
 }
 
 impl Functions {
-    fn get_args(&self) -> usize {
+    pub fn get_args(&self) -> usize {
         match self {
             Functions::Root | Functions::Log => 2,
             Functions::Sqrt | Functions::Cbrt | Functions::Ln => 1,
@@ -19,8 +22,8 @@ impl Functions {
         }
     }
 
-    fn from_string(str: &String) -> Option<Self> {
-        match str.as_str() {
+    pub fn from_string(str: &str) -> Option<Self> {
+        match str {
             "sqrt" => Some(Functions::Sqrt),
             "cbrt" => Some(Functions::Cbrt),
             "root" => Some(Functions::Root),
@@ -29,10 +32,14 @@ impl Functions {
             _ => None,
         }
     }
+
+    pub fn get_all() -> Vec<&'static str> {
+        vec!["sqrt", "cbrt", "root", "log", "ln"]
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-enum Tokens {
+pub enum Tokens {
     Plus,
     UnaryPlus,
     Minus,
@@ -48,15 +55,46 @@ enum Tokens {
     ParenClose,
     Equals,
     Number(u32),
-    Var(char),
+    Var(String),
+    FuncName(String),
+    FuncArgs(usize),
+    FuncArg(usize),
 }
 
 impl Tokens {
-    fn tokenize_string(str: &String, functions: Option<HashMap<String, usize>>) -> Vec<Self> {
+    pub fn tokenize_string(
+        str: &str,
+        functions: Option<&HashMap<String, (SyntaxTree, usize)>>,
+        vars: Option<&HashMap<String, SyntaxTree>>,
+    ) -> Result<Vec<Self>, String> {
+        if str.len() > 8 && &str[..8] == "function" {
+            let (name, other) = str[9..].split_once('(').ok_or("Can't find name")?;
+            let (args, body) = other.split_once(')').ok_or("Can't find args")?;
+            let args = &HashSet::from_iter(args.split(", ").collect::<Vec<&str>>());
+            let mut ret = vec![
+                Tokens::FuncName(name.to_string()),
+                Tokens::FuncArgs(args.len()),
+            ];
+
+            ret.append(&mut Self::tokenize_function_body(
+                body, functions, args,
+            ));
+
+            Ok(ret)
+        } else {
+            Ok(Self::tokenize_equation(str, functions, vars))
+        }
+    }
+
+    fn tokenize_equation(
+        str: &str,
+        functions: Option<&HashMap<String, (SyntaxTree, usize)>>,
+        vars: Option<&HashMap<String, SyntaxTree>>,
+    ) -> Vec<Self> {
         let mut symbols: Vec<Tokens> = vec![];
         let mut chars = str.chars().into_iter().peekable();
 
-        'l: while let Some(char) = chars.next() {
+        while let Some(char) = chars.next() {
             let symbol = match char {
                 '+' if matches!(symbols.last(), Some(last) if last.is_operator())
                     || symbols.last() == None =>
@@ -93,6 +131,50 @@ impl Tokens {
                     Tokens::Number(num)
                 }
                 c if c.is_ascii_alphabetic() => {
+                    fn funkyvars(
+                        mut str: String,
+                        functions: Option<&HashMap<String, (SyntaxTree, usize)>>,
+                        vars: Option<&HashMap<String, SyntaxTree>>
+                    ) -> (String, Option<Tokens>) {
+                        let mut token = None;
+
+                        if let Some(vars) = vars {
+                            for key in vars.keys() {
+                                if str.len() >= key.len() && &str[..key.len()] == key {
+                                    str = str[key.len()..].to_string();
+                                    token = Some(Tokens::Var(key.to_string()));
+                                    break;
+                                }
+                            }
+                        }
+
+                        if let Some(func) = functions {
+                            for key in func.keys() {
+                                if str.len() >= key.len() && &str[..key.len()] == key {
+                                    str = str[key.len()..].to_string();
+                                    token = Some(Tokens::Function(Functions::Custom((
+                                        key.to_string(),
+                                        func.get(key).unwrap().1,
+                                    ))));
+                                    break;
+                                }
+                            }
+                        }
+
+                        let funcs = Functions::get_all();
+
+                        for key in funcs {
+                            if str.len() >= key.len() && &str[..key.len()] == key {
+                                str = str[key.len()..].to_string();
+                                token =
+                                    Some(Tokens::Function(Functions::from_string(key).unwrap()));
+                                break;
+                            }
+                        }
+
+                        (str, token)
+                    }
+
                     let mut cs = vec![c];
 
                     while let Some(c) = chars.peek() {
@@ -103,38 +185,178 @@ impl Tokens {
                         }
                     }
 
-                    let func_str = cs.iter().collect::<String>();
-                    let func = match &functions {
-                        Some(functions) => match functions.get(&func_str) {
-                            Some(len) => Some(Tokens::Function(Functions::Custom((
-                                func_str.to_string(),
-                                *len,
-                            )))),
-                            None => None,
-                        },
-                        _ => None,
-                    };
-                    let func = match Functions::from_string(&func_str) {
-                        _ if func.is_some() => func,
-                        Some(f) => Some(Tokens::Function(f)),
-                        None => None,
-                    };
+                    let (mut str, mut token) = funkyvars(cs.into_iter().collect(), functions, vars);
 
-                    if let Some(func) = func {
-                        if matches!(symbols.last(), Some(Tokens::Number(_))) {
-                            symbols.push(Tokens::Multiply);
+                    if str.is_empty() {
+                        if let Some(token) = token {
+                            token
+                        } else {
+                            panic!("this shouldn't happen")
                         }
-                        symbols.push(func);
                     } else {
-                        for c in cs {
-                            if matches!(symbols.last(), Some(token) if !token.is_operator()) {
-                                symbols.push(Tokens::Multiply);
+                        if token.is_some() {
+                            panic!("this also shouldn't happen")
+                        } else {
+                            while !str.is_empty() {
+                                let ch = str.remove(0);
+
+                                if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                                    symbols.push(Tokens::Multiply)
+                                }
+                                symbols.push(Tokens::Var(ch.to_string()));
+
+                                (str, token) = funkyvars(str, functions, vars);
                             }
-                            symbols.push(Tokens::Var(c));
+
+                            if let Some(token) = token {
+                                if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                                    symbols.push(Tokens::Multiply)
+                                }
+                                token
+                            } else {
+                                continue
+                            }
+                        }
+                    }
+                }
+                _ => continue,
+            };
+            symbols.push(symbol);
+        }
+
+        symbols
+    }
+
+    fn tokenize_function_body(
+        str: &str,
+        functions: Option<&HashMap<String, (SyntaxTree, usize)>>,
+        args: &HashSet<&str>,
+    ) -> Vec<Self> {
+        let mut symbols: Vec<Tokens> = vec![];
+        let mut chars = str.chars().into_iter().peekable();
+
+        while let Some(char) = chars.next() {
+            let symbol = match char {
+                '+' if matches!(symbols.last(), Some(last) if last.is_operator())
+                    || symbols.last() == None =>
+                {
+                    Tokens::UnaryPlus
+                }
+                '+' => Tokens::Plus,
+                '-' if matches!(symbols.last(), Some(last) if last.is_operator())
+                    || symbols.last() == None =>
+                {
+                    Tokens::UnaryMinus
+                }
+                '-' => Tokens::Minus,
+                '*' => Tokens::Multiply,
+                '/' => Tokens::Divide,
+                '%' => Tokens::Modulo,
+                '!' => Tokens::Factorial,
+                '^' => Tokens::Power,
+                '(' => Tokens::ParenOpen,
+                ')' => Tokens::ParenClose,
+                '=' => Tokens::Equals,
+                ',' => Tokens::ArgsSeparator,
+                c if c.is_ascii_digit() => {
+                    let mut num = c.to_digit(10).unwrap();
+
+                    while let Some(c) = chars.peek() {
+                        if c.is_ascii_digit() {
+                            num = num * 10 + chars.next().unwrap().to_digit(10).unwrap();
+                        } else {
+                            break;
                         }
                     }
 
-                    continue;
+                    Tokens::Number(num)
+                }
+                c if c.is_ascii_alphabetic() => {
+                    fn funkyargs(
+                        mut str: String,
+                        functions: Option<&HashMap<String, (SyntaxTree, usize)>>,
+                        args: &HashSet<&str>,
+                    ) -> (String, Option<Tokens>) {
+                        let mut token = None;
+
+                        for (i, key) in args.iter().enumerate() {
+                            if str.len() >= key.len() && &str[..key.len()] == *key {
+                                str = str[key.len()..].to_string();
+                                token = Some(Tokens::FuncArg(i));
+                                break;
+                            }
+                        }
+
+                        if let Some(func) = functions {
+                            for key in func.keys() {
+                                if str.len() >= key.len() && &str[..key.len()] == key {
+                                    str = str[key.len()..].to_string();
+                                    token = Some(Tokens::Function(Functions::Custom((
+                                        key.to_string(),
+                                        func.get(key).unwrap().1,
+                                    ))));
+                                    break;
+                                }
+                            }
+                        }
+
+                        let funcs = Functions::get_all();
+
+                        for key in funcs {
+                            if str.len() >= key.len() && &str[..key.len()] == key {
+                                str = str[key.len()..].to_string();
+                                token =
+                                    Some(Tokens::Function(Functions::from_string(key).unwrap()));
+                                break;
+                            }
+                        }
+
+                        (str, token)
+                    }
+
+                    let mut cs = vec![c];
+
+                    while let Some(c) = chars.peek() {
+                        if c.is_ascii_alphabetic() {
+                            cs.push(chars.next().unwrap());
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let (mut str, mut token) = funkyargs(cs.into_iter().collect(), functions, args);
+
+                    if str.is_empty() {
+                        if let Some(token) = token {
+                            token
+                        } else {
+                            panic!("this shouldn't happen")
+                        }
+                    } else {
+                        if token.is_some() {
+                            panic!("this also shouldn't happen")
+                        } else {
+                            while !str.is_empty() {
+                                let ch = str.remove(0);
+
+                                if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                                    symbols.push(Tokens::Multiply)
+                                }
+                                symbols.push(Tokens::Var(ch.to_string()));
+
+                                (str, token) = funkyargs(str, functions, args);
+                            }
+
+                            if let Some(token) = token {
+                                if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                                    symbols.push(Tokens::Multiply)
+                                }
+                                token
+                            } else {
+                                continue
+                            }
+                        }
+                    }
                 }
                 _ => continue,
             };
@@ -155,8 +377,7 @@ impl Tokens {
             | Tokens::Plus
             | Tokens::UnaryPlus
             | Tokens::Minus
-            | Tokens::UnaryMinus
-            | Tokens::Function(_) => true,
+            | Tokens::UnaryMinus => true,
             _ => false,
         }
     }
@@ -186,6 +407,12 @@ impl Tokens {
     }
 }
 
+enum Type {
+    Expression,
+    Function,
+    Variable,
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SyntaxTree {
     value: Tokens,
@@ -193,7 +420,7 @@ pub struct SyntaxTree {
 }
 
 impl SyntaxTree {
-    fn get(tokens: Vec<Tokens>) -> Self {
+    fn get(tokens: Vec<Tokens>) -> Result<(Type, Self), String> {
         Parser::<std::vec::IntoIter<Tokens>>::parse(tokens)
     }
 
@@ -236,22 +463,9 @@ impl SyntaxTree {
         self
     }
 
-    fn node(mut self, node: SyntaxTree) -> Self {
-        self.nodes = vec![node];
-        self
-    }
-
-    fn push_node(&mut self, node: SyntaxTree) {
-        self.nodes.push(node);
-    }
-
-    fn pop_node(&mut self) {
-        self.nodes.pop();
-    }
-
-    fn inline_vars(&mut self, vars: &HashMap<char, SyntaxTree>) {
-        if let Tokens::Var(var) = self.value {
-            if let Some(ast) = vars.get(&var) {
+    fn inline_vars(&mut self, vars: &HashMap<String, SyntaxTree>) {
+        if let Tokens::Var(var) = &self.value {
+            if let Some(ast) = vars.get(var) {
                 *self = (*ast).clone();
             }
         }
@@ -264,12 +478,11 @@ impl SyntaxTree {
 #[derive(Debug)]
 struct Parser<T: Iterator<Item = Tokens> + std::fmt::Debug> {
     iterator: Peekable<T>,
-    tmp: Vec<SyntaxTree>,
 }
 
 impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
     // Grammar:
-    // start      -> EXP | EXP = EXP
+    // start      -> EXP | EXP "=" EXP | FuncName FuncArgs EXP
     // EXP        -> TERM1 T1
     // TERM1      -> TERM2 T2
     // TERM2      -> FUNCTION T3
@@ -277,143 +490,179 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
     // T2         -> OP2 TERM2 T2 | epsilon
     // T3         -> OP3 PARENS T3 | epsilon
     // FUNCTION   -> OPFUNC? PARENS
-    // PARENS     -> OPBEUNARY? (number | ParenOpen EXP{, EXP}? ParenClose) OPAFUNARY?
-    // OP1        -> + | -
-    // OP2        -> * | / | %
-    // OP3        -> ^
-    // OPBEUNARY  -> + | -
-    // OPAFUNARY  -> !
+    // PARENS     -> OPBEUNARY? (number | "(" EXP{"," EXP}? ")") OPAFUNARY?
+    // OP1        -> "+" | "-"
+    // OP2        -> "*" | "/" | "%"
+    // OP3        -> "^"
+    // OPBEUNARY  -> "+" | "-"
+    // OPAFUNARY  -> "!"
     // OPFUNC     -> functions eg. sqrt
-    fn parse(tokens: Vec<Tokens>) -> SyntaxTree {
+    fn parse(tokens: Vec<Tokens>) -> Result<(Type, SyntaxTree), String> {
         let mut tokens = Parser {
             iterator: tokens.into_iter().peekable(),
-            tmp: vec![],
         };
-        let value = tokens.exp();
-        let peek = tokens.peek();
 
-        if peek == None {
-            value
-        } else if peek == Some(&Tokens::Equals) {
-            SyntaxTree::new(tokens.next().unwrap()).nodes(vec![value, tokens.exp()])
+        if matches!(tokens.peek(), Some(Tokens::FuncName(_))) {
+            let name = tokens.next().unwrap();
+            if matches!(tokens.peek(), Some(Tokens::FuncArgs(_))) {
+                let args = tokens.next().unwrap();
+                let value = tokens.exp()?;
+
+                if tokens.peek() == None {
+                    Ok((
+                        Type::Function,
+                        SyntaxTree::new(name).nodes(vec![SyntaxTree::new(args), value]),
+                    ))
+                } else {
+                    Err(format!("Extra tokens {tokens:#?}"))
+                }
+            } else {
+                Err(format!("Expected FuncArgs, got {tokens:#?}"))
+            }
         } else {
-            panic!("Something went wrong got {peek:#?}")
+            let value = tokens.exp()?;
+            let peek = tokens.peek();
+
+            if peek == None {
+                Ok((Type::Expression, value))
+            } else if peek == Some(&Tokens::Equals) {
+                Ok((
+                    Type::Expression,
+                    SyntaxTree::new(tokens.next().unwrap()).nodes(vec![value, tokens.exp()?]),
+                ))
+            } else {
+                Err(format!("Extra tokens {tokens:#?}"))
+            }
         }
     }
 
-    fn exp(&mut self) -> SyntaxTree {
+    fn exp(&mut self) -> Result<SyntaxTree, String> {
         let peek = self.peek();
 
-        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::FuncArg(_) | Tokens::ParenOpen | Tokens::Function(_)))
         {
-            let term1 = self.term1();
-            self.t1(term1)
+            let term1 = self.term1()?;
+            Ok(self.t1(term1)?)
         } else {
-            panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
+            Err(format!(
+                "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+            ))
         }
     }
 
-    fn term1(&mut self) -> SyntaxTree {
+    fn term1(&mut self) -> Result<SyntaxTree, String> {
         let peek = self.peek();
 
-        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::FuncArg(_) | Tokens::ParenOpen | Tokens::Function(_)))
         {
-            let term2 = self.term2();
-            self.t2(term2)
+            let term2 = self.term2()?;
+            Ok(self.t2(term2)?)
         } else {
-            panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
+            Err(format!(
+                "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+            ))
         }
     }
 
-    fn term2(&mut self) -> SyntaxTree {
+    fn term2(&mut self) -> Result<SyntaxTree, String> {
         let peek = self.peek();
 
-        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
+        if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::FuncArg(_) | Tokens::ParenOpen | Tokens::Function(_)))
         {
-            let function = self.function();
-            self.t3(function)
+            let function = self.function()?;
+            Ok(self.t3(function)?)
         } else {
-            panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
+            Err(format!(
+                "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+            ))
         }
     }
 
-    fn t1(&mut self, prev: SyntaxTree) -> SyntaxTree {
+    fn t1(&mut self, prev: SyntaxTree) -> Result<SyntaxTree, String> {
         if matches!(self.peek(), Some(token) if token.op_level() == 1) {
             let op = self.next().unwrap();
             let peek = self.peek();
 
-            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
+            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::FuncArg(_) | Tokens::ParenOpen | Tokens::Function(_)))
             {
-                let term1 = self.term1();
-                self.t1(SyntaxTree::new(op).nodes(vec![prev, term1]))
+                let term1 = self.term1()?;
+                Ok(self.t1(SyntaxTree::new(op).nodes(vec![prev, term1]))?)
             } else {
-                panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
+                Err(format!(
+                    "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+                ))
             }
         } else {
-            prev
+            Ok(prev)
         }
     }
 
-    fn t2(&mut self, prev: SyntaxTree) -> SyntaxTree {
+    fn t2(&mut self, prev: SyntaxTree) -> Result<SyntaxTree, String> {
         if matches!(self.peek(), Some(token) if token.op_level() == 2) {
             let op = self.next().unwrap();
             let peek = self.peek();
 
-            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
+            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::FuncArg(_) | Tokens::ParenOpen | Tokens::Function(_)))
             {
-                let term2 = self.term2();
-                self.t2(SyntaxTree::new(op).nodes(vec![prev, term2]))
+                let term2 = self.term2()?;
+                Ok(self.t2(SyntaxTree::new(op).nodes(vec![prev, term2]))?)
             } else {
-                panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
+                Err(format!(
+                    "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+                ))
             }
         } else {
-            prev
+            Ok(prev)
         }
     }
 
-    fn t3(&mut self, mut prev: SyntaxTree) -> SyntaxTree {
+    fn t3(&mut self, mut prev: SyntaxTree) -> Result<SyntaxTree, String> {
         if matches!(self.peek(), Some(token) if token.op_level() == 3) {
             let op = self.next().unwrap();
             let peek = self.peek();
 
-            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::ParenOpen | Tokens::Function(_)))
+            if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::Number(_) | Tokens::Var(_) | Tokens::FuncArg(_) | Tokens::ParenOpen | Tokens::Function(_)))
             {
                 if prev.value == Tokens::Power {
                     let node = prev.nodes.pop().unwrap();
 
-                    prev.nodes.push(SyntaxTree::new(op).nodes(vec![
-                        node,
-                        self.parens().into_iter().next().unwrap(),
-                    ]));
+                    prev.nodes.push(
+                        SyntaxTree::new(op)
+                            .nodes(vec![node, self.parens()?.into_iter().next().unwrap()]),
+                    );
 
-                    prev
+                    Ok(prev)
                 } else {
                     let mut v = vec![prev];
-                    v.append(&mut self.parens());
+                    v.append(&mut self.parens()?);
                     self.t3(SyntaxTree::new(op).nodes(v))
                 }
             } else {
-                panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}")
+                Err(format!(
+                    "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+                ))
             }
         } else {
-            prev
+            Ok(prev)
         }
     }
 
-    fn function(&mut self) -> SyntaxTree {
+    fn function(&mut self) -> Result<SyntaxTree, String> {
         let peek = self.peek();
 
         if matches!(peek, Some(Tokens::Function(_))) {
-            SyntaxTree::new(self.next().unwrap()).nodes(self.parens())
-        } else if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::ParenOpen | Tokens::Number(_) | Tokens::Var(_)))
+            Ok(SyntaxTree::new(self.next().unwrap()).nodes(self.parens()?))
+        } else if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::ParenOpen | Tokens::Number(_) | Tokens::Var(_) | Tokens::FuncArg(_)))
         {
-            self.parens().into_iter().next().unwrap()
+            Ok(self.parens()?.into_iter().next().unwrap())
         } else {
-            panic!("Expected Function or PrefixUnary or Number or Var or ParenOpen got {peek:#?}",)
+            Err(format!(
+                "Expected Function or PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+            ))
         }
     }
 
-    fn parens(&mut self) -> Vec<SyntaxTree> {
+    fn parens(&mut self) -> Result<Vec<SyntaxTree>, String> {
         let peek = self.peek();
 
         let unary = if matches!(peek, Some(token) if token.is_prefix_unary()) {
@@ -422,15 +671,18 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
             None
         };
         let peek = self.peek();
-        let mut token = if matches!(peek, Some(Tokens::Number(_) | Tokens::Var(_))) {
+        let mut token = if matches!(
+            peek,
+            Some(Tokens::Number(_) | Tokens::Var(_) | Tokens::FuncArg(_))
+        ) {
             vec![SyntaxTree::new(self.next().unwrap())]
         } else if matches!(peek, Some(Tokens::ParenOpen)) {
             self.next();
-            let mut value = vec![self.exp()];
+            let mut value = vec![self.exp()?];
 
             while let Some(&Tokens::ArgsSeparator) = self.peek() {
                 self.next();
-                value.push(self.exp());
+                value.push(self.exp()?);
             }
 
             let peek = self.peek();
@@ -439,21 +691,23 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
                 self.next();
                 value
             } else {
-                panic!("Expected ParenOpen got {peek:#?}")
+                return Err(format!("Expected ParenOpen got {peek:#?}"));
             }
         } else {
-            panic!("Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}",)
+            return Err(format!(
+                "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+            ));
         };
 
         if matches!(self.peek(), Some(token) if token.is_postfix_unary()) {
             token = vec![SyntaxTree::new(self.next().unwrap()).nodes(token)]
         }
 
-        if let Some(unary) = unary {
+        Ok(if let Some(unary) = unary {
             vec![SyntaxTree::new(unary).nodes(token)]
         } else {
             token
-        }
+        })
     }
 
     fn peek(&mut self) -> Option<&Tokens> {
@@ -465,38 +719,55 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
     }
 }
 
-pub struct Equation {
-    input: String,
-    ast: SyntaxTree,
-    answer: Option<Vec<Tokens>>,
-    vars: Option<HashMap<char, SyntaxTree>>,
+pub struct Repl {
+    inputs: Vec<String>,
+    asts: Vec<SyntaxTree>,
+    answers: Vec<Option<Vec<Tokens>>>,
+    vars: Option<HashMap<String, SyntaxTree>>,
     functions: Option<HashMap<String, (SyntaxTree, usize)>>,
 }
 
-impl Equation {
+impl Repl {
     pub fn new(
-        equation: String,
-        vars: Option<HashMap<char, SyntaxTree>>,
+        vars: Option<HashMap<String, SyntaxTree>>,
         functions: Option<HashMap<String, (SyntaxTree, usize)>>,
-    ) -> Equation {
-        Equation {
-            ast: SyntaxTree::get(Tokens::tokenize_string(&equation, None)),
-            input: equation,
-            answer: None,
+    ) -> Repl {
+        Repl {
+            inputs: vec![],
+            asts: vec![],
+            answers: vec![],
             vars,
             functions,
         }
     }
 
+    pub fn input(&mut self, input: String) -> Result<(), String> {
+        match SyntaxTree::get(Tokens::tokenize_string(
+            &input,
+            self.functions.as_ref(),
+            self.vars.as_ref(),
+        )?)? {
+            (Type::Expression, ast) => self.asts.push(ast),
+            (Type::Function, ast) => self.asts.push(ast),
+            _ => (),
+        };
+
+        Ok(self.inputs.push(input))
+    }
+
+    pub fn test_last_ast(&self) {
+        println!("{:#?}", self.asts.last());
+    }
+
     pub fn test_tokens(input: String) {
-        println!("{:#?}", Tokens::tokenize_string(&input, None));
+        println!("{:#?}", Tokens::tokenize_string(&input, None, None));
     }
 
     pub fn solve(&mut self) {
-        if let Some(vars) = &self.vars {
-            self.ast.inline_vars(&vars);
-        }
-        println!("{:#?}", self.ast);
-        println!("{}", self.ast.solve());
+        // if let Some(vars) = &self.vars {
+        //     self.ast.inline_vars(&vars);
+        // }
+        // println!("{:#?}", self.ast);
+        // println!("{}", self.ast.solve());
     }
 }
