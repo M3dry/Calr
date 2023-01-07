@@ -10,7 +10,7 @@ pub enum Functions {
     Root,
     Log,
     Ln,
-    Custom((String, usize)),
+    Custom(String),
 }
 
 impl Functions {
@@ -18,7 +18,7 @@ impl Functions {
         match self {
             Functions::Root | Functions::Log => 2,
             Functions::Sqrt | Functions::Cbrt | Functions::Ln => 1,
-            Functions::Custom((_, num)) => *num,
+            Functions::Custom(_) => 0,
         }
     }
 
@@ -56,6 +56,7 @@ pub enum Tokens {
     Equals,
     Number(u32),
     Var(String),
+    VarName(String),
     FuncName(String),
     FuncArgs(usize),
     FuncArg(usize),
@@ -76,9 +77,14 @@ impl Tokens {
                 Tokens::FuncArgs(args.len()),
             ];
 
-            ret.append(&mut Self::tokenize_function_body(
-                body, functions, args,
-            ));
+            ret.append(&mut Self::tokenize_function_body(body, functions, args));
+
+            Ok(ret)
+        } else if str.len() > 8 && &str[..8] == "variable" {
+            let (name, body) = str[9..].split_once(' ').ok_or("Can't find name")?;
+            let mut ret = vec![Self::VarName(name.to_string())];
+
+            ret.append(&mut Self::tokenize_equation(body, functions, vars));
 
             Ok(ret)
         } else {
@@ -134,7 +140,7 @@ impl Tokens {
                     fn funkyvars(
                         mut str: String,
                         functions: Option<&HashMap<String, (SyntaxTree, usize)>>,
-                        vars: Option<&HashMap<String, SyntaxTree>>
+                        vars: Option<&HashMap<String, SyntaxTree>>,
                     ) -> (String, Option<Tokens>) {
                         let mut token = None;
 
@@ -152,10 +158,8 @@ impl Tokens {
                             for key in func.keys() {
                                 if str.len() >= key.len() && &str[..key.len()] == key {
                                     str = str[key.len()..].to_string();
-                                    token = Some(Tokens::Function(Functions::Custom((
-                                        key.to_string(),
-                                        func.get(key).unwrap().1,
-                                    ))));
+                                    token =
+                                        Some(Tokens::Function(Functions::Custom(key.to_string())));
                                     break;
                                 }
                             }
@@ -214,7 +218,7 @@ impl Tokens {
                                 }
                                 token
                             } else {
-                                continue
+                                continue;
                             }
                         }
                     }
@@ -291,10 +295,8 @@ impl Tokens {
                             for key in func.keys() {
                                 if str.len() >= key.len() && &str[..key.len()] == key {
                                     str = str[key.len()..].to_string();
-                                    token = Some(Tokens::Function(Functions::Custom((
-                                        key.to_string(),
-                                        func.get(key).unwrap().1,
-                                    ))));
+                                    token =
+                                        Some(Tokens::Function(Functions::Custom(key.to_string())));
                                     break;
                                 }
                             }
@@ -353,7 +355,7 @@ impl Tokens {
                                 }
                                 token
                             } else {
-                                continue
+                                continue;
                             }
                         }
                     }
@@ -413,6 +415,11 @@ enum Type {
     Variable,
 }
 
+enum Inliner<'a> {
+    Vars(&'a HashMap<String, SyntaxTree>),
+    Args(&'a HashMap<usize, SyntaxTree>),
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SyntaxTree {
     value: Tokens,
@@ -463,15 +470,65 @@ impl SyntaxTree {
         self
     }
 
-    fn inline_vars(&mut self, vars: &HashMap<String, SyntaxTree>) {
-        if let Tokens::Var(var) = &self.value {
-            if let Some(ast) = vars.get(var) {
-                *self = (*ast).clone();
+    fn inline_vars(mut self, inliner: &Inliner) -> Result<Self, String> {
+        match (inliner, &self.value) {
+            (Inliner::Vars(vars), Tokens::Var(var)) => {
+                if let Some(ast) = vars.get(var) {
+                    self = ast.clone()
+                }
+            }
+            (Inliner::Args(args), Tokens::FuncArg(id)) => {
+                if let Some(ast) = args.get(id) {
+                    self = ast.clone()
+                } else {
+                    return Err(String::from("Not enough arguments"));
+                }
+            }
+            _ => (),
+        };
+
+        let len = self.nodes.len();
+        self.nodes = self
+            .nodes
+            .into_iter()
+            .map_while(|node| node.inline_vars(&inliner).ok())
+            .collect();
+
+        if len != self.nodes.len() {
+            Err(String::from("Not enough arguments"))
+        } else {
+            Ok(self)
+        }
+    }
+
+    fn inline_functions(
+        mut self,
+        functions: &HashMap<String, (SyntaxTree, usize)>,
+    ) -> Result<Self, String> {
+        let len = self.nodes.len();
+        self.nodes = self
+            .nodes
+            .into_iter()
+            .map_while(|node| node.inline_functions(functions).ok())
+            .collect();
+        if len != self.nodes.len() {
+            return Err(String::from("Not enough arguments"));
+        }
+
+        if let Tokens::Function(Functions::Custom(name)) = &self.value {
+            if let Some((ast, args)) = functions.get(name) {
+                self = ast.clone().inline_vars(&Inliner::Args(
+                    &self
+                        .nodes
+                        .into_iter()
+                        .take(*args)
+                        .enumerate()
+                        .collect::<HashMap<usize, SyntaxTree>>(),
+                ))?;
             }
         }
-        for node in &mut self.nodes {
-            node.inline_vars(&vars)
-        }
+
+        Ok(self)
     }
 }
 
@@ -482,7 +539,7 @@ struct Parser<T: Iterator<Item = Tokens> + std::fmt::Debug> {
 
 impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
     // Grammar:
-    // start      -> EXP | EXP "=" EXP | FuncName FuncArgs EXP
+    // start      -> EXP | EXP "=" EXP | FuncName FuncArgs EXP | VarName EXP
     // EXP        -> TERM1 T1
     // TERM1      -> TERM2 T2
     // TERM2      -> FUNCTION T3
@@ -501,8 +558,9 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
         let mut tokens = Parser {
             iterator: tokens.into_iter().peekable(),
         };
+        let peek = tokens.peek();
 
-        if matches!(tokens.peek(), Some(Tokens::FuncName(_))) {
+        if matches!(peek, Some(Tokens::FuncName(_))) {
             let name = tokens.next().unwrap();
             if matches!(tokens.peek(), Some(Tokens::FuncArgs(_))) {
                 let args = tokens.next().unwrap();
@@ -514,10 +572,25 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
                         SyntaxTree::new(name).nodes(vec![SyntaxTree::new(args), value]),
                     ))
                 } else {
-                    Err(format!("Extra tokens {tokens:#?}"))
+                    Err(format!(
+                        "Extra tokens {:#?}",
+                        tokens.iterator.collect::<Vec<Tokens>>()
+                    ))
                 }
             } else {
                 Err(format!("Expected FuncArgs, got {tokens:#?}"))
+            }
+        } else if matches!(peek, Some(Tokens::VarName(_))) {
+            let name = tokens.next().unwrap();
+            let value = tokens.exp()?;
+
+            if tokens.peek() == None {
+                Ok((Type::Variable, SyntaxTree::new(name).nodes(vec![value])))
+            } else {
+                Err(format!(
+                    "Extra tokens {:#?}",
+                    tokens.iterator.collect::<Vec<Tokens>>()
+                ))
             }
         } else {
             let value = tokens.exp()?;
@@ -531,7 +604,10 @@ impl<T: Iterator<Item = Tokens> + std::fmt::Debug> Parser<T> {
                     SyntaxTree::new(tokens.next().unwrap()).nodes(vec![value, tokens.exp()?]),
                 ))
             } else {
-                Err(format!("Extra tokens {tokens:#?}"))
+                Err(format!(
+                    "Extra tokens {:#?}",
+                    tokens.iterator.collect::<Vec<Tokens>>()
+                ))
             }
         }
     }
@@ -747,9 +823,55 @@ impl Repl {
             self.functions.as_ref(),
             self.vars.as_ref(),
         )?)? {
-            (Type::Expression, ast) => self.asts.push(ast),
-            (Type::Function, ast) => self.asts.push(ast),
-            _ => (),
+            (Type::Expression, ast) => self.asts.push({
+                let ast = if let Some(vars) = &self.vars {
+                    ast.inline_vars(&Inliner::Vars(vars))?
+                } else {
+                    ast
+                };
+
+                if let Some(functions) = &self.functions {
+                    ast.inline_functions(functions)?
+                } else {
+                    ast
+                }
+            }),
+            (Type::Function, mut ast) => {
+                let func = (
+                    match ast.value {
+                        Tokens::FuncName(name) => name,
+                        _ => panic!("something went wrong"),
+                    },
+                    (
+                        std::mem::replace(&mut ast.nodes[1], SyntaxTree::new(Tokens::Plus)),
+                        match &ast.nodes[0].value {
+                            Tokens::FuncArgs(args) => *args,
+                            got => panic!("something went wrong {got:#?}"),
+                        },
+                    ),
+                );
+
+                if let Some(functions) = &mut self.functions {
+                    functions.insert(func.0, func.1);
+                } else {
+                    self.functions = Some(HashMap::from([(func.0, func.1)]));
+                }
+            }
+            (Type::Variable, mut ast) => {
+                let var = (
+                    match ast.value {
+                        Tokens::VarName(name) => name,
+                        _ => panic!("something went wrong"),
+                    },
+                    std::mem::replace(&mut ast.nodes[0], SyntaxTree::new(Tokens::Plus)),
+                );
+
+                if let Some(vars) = &mut self.vars {
+                    vars.insert(var.0, var.1);
+                } else {
+                    self.vars = Some(HashMap::from([(var.0, var.1)]))
+                }
+            }
         };
 
         Ok(self.inputs.push(input))
@@ -763,11 +885,12 @@ impl Repl {
         println!("{:#?}", Tokens::tokenize_string(&input, None, None));
     }
 
-    pub fn solve(&mut self) {
-        // if let Some(vars) = &self.vars {
-        //     self.ast.inline_vars(&vars);
-        // }
-        // println!("{:#?}", self.ast);
-        // println!("{}", self.ast.solve());
+    pub fn test_ast(input: String) {
+        println!(
+            "{:#?}",
+            SyntaxTree::get(Tokens::tokenize_string(&input, None, None).unwrap())
+                .unwrap()
+                .1
+        );
     }
 }
