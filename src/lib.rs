@@ -9,7 +9,7 @@ use parser::{
 };
 
 pub struct Repl {
-    inputs: Vec<String>,
+    inputs: Vec<(String, Option<i64>)>,
     asts: Vec<SyntaxTree>,
     answers: Vec<Option<Vec<Tokens>>>,
     vars: Option<HashMap<String, SyntaxTree>>,
@@ -80,7 +80,9 @@ impl Repl {
             }
         };
 
-        Ok(self.inputs.push(input))
+        Ok(self
+            .inputs
+            .push((input, self.asts.last().map(|ast| ast.solve()))))
     }
 
     pub fn test_last_ast(&self) {

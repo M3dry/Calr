@@ -137,18 +137,20 @@ impl Tokens {
                 }
                 c if c.is_ascii_alphabetic() => {
                     fn funkyvars(
-                        mut str: String,
+                        str: String,
                         functions: Option<&HashMap<String, (SyntaxTree, usize)>>,
                         vars: Option<&HashMap<String, SyntaxTree>>,
-                    ) -> (String, Option<Tokens>) {
-                        let mut token = None;
-
+                    ) -> (String, Option<(bool, Tokens)>, bool) {
                         if let Some(vars) = vars {
                             for key in vars.keys() {
                                 if str.len() >= key.len() && &str[..key.len()] == key {
-                                    str = str[key.len()..].to_string();
-                                    token = Some(Tokens::Var(key.to_string()));
-                                    break;
+                                    return (
+                                        str[key.len()..].to_string(),
+                                        Some((false, Tokens::Var(key.to_string()))),
+                                        true,
+                                    );
+                                } else if str == &key[..str.len()] {
+                                    return (str, None, true)
                                 }
                             }
                         }
@@ -156,70 +158,77 @@ impl Tokens {
                         if let Some(func) = functions {
                             for key in func.keys() {
                                 if str.len() >= key.len() && &str[..key.len()] == key {
-                                    str = str[key.len()..].to_string();
-                                    token =
-                                        Some(Tokens::Function(Functions::Custom(key.to_string())));
-                                    break;
+                                    return (
+                                        str[key.len()..].to_string(),
+                                        Some((
+                                            true,
+                                            Tokens::Function(Functions::Custom(key.to_string())),
+                                        )),
+                                        true,
+                                    );
+                                } else if str == &key[..str.len()] {
+                                    return (str, None, true)
                                 }
                             }
                         }
 
-                        let funcs = Functions::get_all();
-
-                        for key in funcs {
+                        for key in Functions::get_all() {
                             if str.len() >= key.len() && &str[..key.len()] == key {
-                                str = str[key.len()..].to_string();
-                                token =
-                                    Some(Tokens::Function(Functions::from_string(key).unwrap()));
-                                break;
+                                return (
+                                    str[key.len()..].to_string(),
+                                    Some((
+                                        true,
+                                        Tokens::Function(Functions::from_string(key).unwrap()),
+                                    )),
+                                    true,
+                                );
+                            } else if str == &key[..str.len()] {
+                                return (str, None, true)
                             }
                         }
 
-                        (str, token)
+                        (str, None, false)
                     }
 
-                    let mut cs = vec![c];
+                    let mut str = c.to_string();
+                    let mut token;
+                    let mut starts;
 
-                    while let Some(c) = chars.peek() {
-                        if c.is_ascii_alphabetic() {
-                            cs.push(chars.next().unwrap());
-                        } else {
-                            break;
-                        }
-                    }
+                    let token = loop {
+                        (str, token, starts) = funkyvars(str, functions, vars);
 
-                    let (mut str, mut token) = funkyvars(cs.into_iter().collect(), functions, vars);
-
-                    if str.is_empty() {
-                        if let Some(token) = token {
-                            token
-                        } else {
-                            panic!("this shouldn't happen")
-                        }
-                    } else {
-                        if token.is_some() {
-                            panic!("this also shouldn't happen")
-                        } else {
-                            while !str.is_empty() {
-                                let ch = str.remove(0);
-
-                                if matches!(symbols.last(), Some(token) if !token.is_operator()) {
-                                    symbols.push(Tokens::Multiply)
-                                }
-                                symbols.push(Tokens::Var(ch.to_string()));
-
-                                (str, token) = funkyvars(str, functions, vars);
+                        if let Some((true, token)) = token {
+                            if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                                symbols.push(Tokens::Multiply);
                             }
+                            break Some(token);
+                        } else if let Some((false, token)) = token {
+                            if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                                symbols.push(Tokens::Multiply);
+                            }
+                            symbols.push(token)
+                        } else if !starts {
+                            if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                                symbols.push(Tokens::Multiply);
+                            }
+                            symbols.push(Tokens::Var(str.remove(0).to_string()))
+                        }
 
-                            if let Some(token) = token {
-                                if matches!(symbols.last(), Some(token) if !token.is_operator()) {
-                                    symbols.push(Tokens::Multiply)
-                                }
-                                token
+                        if let Some(char) = chars.peek() {
+                            if char.is_ascii_alphabetic() {
+                                str.push(chars.next().unwrap());
                             } else {
-                                continue;
+                                break None;
                             }
+                        } else {
+                            break None;
                         }
+                    };
+
+                    if let Some(token) = token {
+                        token
+                    } else {
+                        continue;
                     }
                 }
                 _ => continue,
@@ -276,87 +285,93 @@ impl Tokens {
                 }
                 c if c.is_ascii_alphabetic() => {
                     fn funkyargs(
-                        mut str: String,
+                        str: String,
                         functions: Option<&HashMap<String, (SyntaxTree, usize)>>,
                         args: &HashSet<&str>,
-                    ) -> (String, Option<Tokens>) {
-                        let mut token = None;
-
-                        for (i, key) in args.iter().enumerate() {
+                    ) -> (String, Option<(bool, Tokens)>, bool) {
+                        for key in args {
                             if str.len() >= key.len() && &str[..key.len()] == *key {
-                                str = str[key.len()..].to_string();
-                                token = Some(Tokens::FuncArg(i));
-                                break;
+                                return (
+                                    str[key.len()..].to_string(),
+                                    Some((false, Tokens::Var(key.to_string()))),
+                                    true,
+                                );
+                            } else if key.len() >= str.len() && str == &key[..str.len()] {
+                                return (str, None, true)
                             }
                         }
 
                         if let Some(func) = functions {
                             for key in func.keys() {
                                 if str.len() >= key.len() && &str[..key.len()] == key {
-                                    str = str[key.len()..].to_string();
-                                    token =
-                                        Some(Tokens::Function(Functions::Custom(key.to_string())));
-                                    break;
+                                    return (
+                                        str[key.len()..].to_string(),
+                                        Some((
+                                            true,
+                                            Tokens::Function(Functions::Custom(key.to_string())),
+                                        )),
+                                        true,
+                                    );
+                                } else if key.len() >= str.len() && str == &key[..str.len()] {
+                                    return (str, None, true)
                                 }
                             }
                         }
 
-                        let funcs = Functions::get_all();
-
-                        for key in funcs {
+                        for key in Functions::get_all() {
                             if str.len() >= key.len() && &str[..key.len()] == key {
-                                str = str[key.len()..].to_string();
-                                token =
-                                    Some(Tokens::Function(Functions::from_string(key).unwrap()));
-                                break;
+                                return (
+                                    str[key.len()..].to_string(),
+                                    Some((
+                                        true,
+                                        Tokens::Function(Functions::from_string(key).unwrap()),
+                                    )),
+                                    true,
+                                );
+                            } else if key.len() >= str.len() && str == &key[..str.len()] {
+                                return (str, None, true)
                             }
                         }
 
-                        (str, token)
+                        (str, None, false)
                     }
 
-                    let mut cs = vec![c];
+                    let mut str = c.to_string();
+                    let mut token;
+                    let mut starts;
 
-                    while let Some(c) = chars.peek() {
-                        if c.is_ascii_alphabetic() {
-                            cs.push(chars.next().unwrap());
-                        } else {
-                            break;
-                        }
-                    }
+                    let token = loop {
+                        (str, token, starts) = funkyargs(str, functions, args);
 
-                    let (mut str, mut token) = funkyargs(cs.into_iter().collect(), functions, args);
-
-                    if str.is_empty() {
-                        if let Some(token) = token {
-                            token
-                        } else {
-                            panic!("this shouldn't happen")
-                        }
-                    } else {
-                        if token.is_some() {
-                            panic!("this also shouldn't happen")
-                        } else {
-                            while !str.is_empty() {
-                                let ch = str.remove(0);
-
-                                if matches!(symbols.last(), Some(token) if !token.is_operator()) {
-                                    symbols.push(Tokens::Multiply)
-                                }
-                                symbols.push(Tokens::Var(ch.to_string()));
-
-                                (str, token) = funkyargs(str, functions, args);
+                        if let Some((true, token)) = token {
+                            if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                                symbols.push(Tokens::Multiply);
                             }
+                            break Some(token);
+                        } else if let Some((false, token)) = token {
+                            if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                                symbols.push(Tokens::Multiply);
+                            }
+                            symbols.push(token)
+                        } else if !starts {
+                            str.remove(0);
+                        }
 
-                            if let Some(token) = token {
-                                if matches!(symbols.last(), Some(token) if !token.is_operator()) {
-                                    symbols.push(Tokens::Multiply)
-                                }
-                                token
+                        if let Some(char) = chars.peek() {
+                            if char.is_ascii_alphabetic() {
+                                str.push(chars.next().unwrap());
                             } else {
-                                continue;
+                                break None;
                             }
+                        } else {
+                            break None;
                         }
+                    };
+
+                    if let Some(token) = token {
+                        token
+                    } else {
+                        continue;
                     }
                 }
                 _ => continue,
@@ -370,6 +385,7 @@ impl Tokens {
     fn is_operator(&self) -> bool {
         match self {
             Tokens::Equals
+            | Tokens::Function(_)
             | Tokens::Power
             | Tokens::Factorial
             | Tokens::Multiply

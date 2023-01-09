@@ -29,7 +29,7 @@ impl Parser {
     // T2         -> OP2 TERM2 T2 | epsilon
     // T3         -> OP3 PARENS T3 | epsilon
     // FUNCTION   -> OPFUNC? PARENS
-    // PARENS     -> OPBEUNARY? (number | "(" EXP{"," EXP}? ")") OPAFUNARY?
+    // PARENS     -> OPBEUNARY? (FUNCTION | number | "(" EXP{"," EXP}? ")") OPAFUNARY?
     // OP1        -> "+" | "-"
     // OP2        -> "*" | "/" | "%"
     // OP3        -> "^"
@@ -103,7 +103,7 @@ impl Parser {
             Ok(self.t1(term1)?)
         } else {
             Err(format!(
-                "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+                "exp: Expected PrefixUnary or Number or Var or ParenOpen got {peek:?}"
             ))
         }
     }
@@ -117,7 +117,7 @@ impl Parser {
             Ok(self.t2(term2)?)
         } else {
             Err(format!(
-                "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+                "term1: Expected PrefixUnary or Number or Var or ParenOpen got {peek:?}"
             ))
         }
     }
@@ -131,7 +131,7 @@ impl Parser {
             Ok(self.t3(function)?)
         } else {
             Err(format!(
-                "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+                "term2: Expected PrefixUnary or Number or Var or ParenOpen got {peek:?}"
             ))
         }
     }
@@ -147,7 +147,7 @@ impl Parser {
                 Ok(self.t1(SyntaxTree::new(op).nodes(vec![prev, term1]))?)
             } else {
                 Err(format!(
-                    "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+                    "t1: Expected PrefixUnary or Number or Var or ParenOpen got {peek:?}"
                 ))
             }
         } else {
@@ -166,7 +166,7 @@ impl Parser {
                 Ok(self.t2(SyntaxTree::new(op).nodes(vec![prev, term2]))?)
             } else {
                 Err(format!(
-                    "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+                    "t2: Expected PrefixUnary or Number or Var or ParenOpen got {peek:?}"
                 ))
             }
         } else {
@@ -197,7 +197,7 @@ impl Parser {
                 }
             } else {
                 Err(format!(
-                    "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
+                    "t3: Expected PrefixUnary or Number or Var or ParenOpen got {peek:?}"
                 ))
             }
         } else {
@@ -206,17 +206,26 @@ impl Parser {
     }
 
     fn function(&mut self) -> Result<SyntaxTree, String> {
-        let peek = self.peek();
-
-        if matches!(peek, Some(Tokens::Function(_))) {
-            Ok(SyntaxTree::new(self.next().unwrap()).nodes(self.parens()?))
-        } else if matches!(peek, Some(token) if token.is_prefix_unary() || matches!(token, Tokens::ParenOpen | Tokens::Number(_) | Tokens::Var(_) | Tokens::FuncArg(_)))
-        {
-            Ok(self.parens()?.into_iter().next().unwrap())
-        } else {
-            Err(format!(
-                "Expected Function or PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
-            ))
+        match self.peek() {
+            Some(Tokens::Function(_)) => {
+                Ok(SyntaxTree::new(self.next().unwrap()).nodes(self.parens()?))
+            }
+            Some(token)
+                if token.is_prefix_unary()
+                    || matches!(
+                        token,
+                        Tokens::Function(_)
+                            | Tokens::ParenOpen
+                            | Tokens::Number(_)
+                            | Tokens::Var(_)
+                            | Tokens::FuncArg(_)
+                    ) =>
+            {
+                Ok(self.parens()?.into_iter().next().unwrap())
+            }
+            peek => Err(format!(
+                "function: Expected Function|PrefixUnary|Number|Var|ParenOpen got {peek:?}"
+            )),
         }
     }
 
@@ -228,33 +237,36 @@ impl Parser {
         } else {
             None
         };
+
         let peek = self.peek();
-        let mut token = if matches!(
-            peek,
-            Some(Tokens::Number(_) | Tokens::Var(_) | Tokens::FuncArg(_))
-        ) {
-            vec![SyntaxTree::new(self.next().unwrap())]
-        } else if matches!(peek, Some(Tokens::ParenOpen)) {
-            self.next();
-            let mut value = vec![self.exp()?];
-
-            while let Some(&Tokens::ArgsSeparator) = self.peek() {
-                self.next();
-                value.push(self.exp()?);
+        let mut token = match peek {
+            Some(Tokens::Function(_)) => vec![self.function()?],
+            Some(Tokens::Number(_) | Tokens::Var(_) | Tokens::FuncArgs(_)) => {
+                vec![SyntaxTree::new(self.next().unwrap())]
             }
-
-            let peek = self.peek();
-
-            if peek == Some(&Tokens::ParenClose) {
+            Some(Tokens::ParenOpen) => {
                 self.next();
-                value
-            } else {
-                return Err(format!("Expected ParenOpen got {peek:#?}"));
+                let mut value = vec![self.exp()?];
+
+                while let Some(&Tokens::ArgsSeparator) = self.peek() {
+                    self.next();
+                    value.push(self.exp()?);
+                }
+
+                let peek = self.peek();
+
+                if peek == Some(&Tokens::ParenClose) {
+                    self.next();
+                    value
+                } else {
+                    return Err(format!("Expected ParenOpen got {peek:?}"));
+                }
             }
-        } else {
-            return Err(format!(
-                "Expected PrefixUnary or Number or Var or ParenOpen got {peek:#?}"
-            ));
+            _ => {
+                return Err(format!(
+                    "parens: Expected PrefixUnary|Function|Number|Var|ParenOpen got {peek:?}"
+                ))
+            }
         };
 
         if matches!(self.peek(), Some(token) if token.is_postfix_unary()) {
