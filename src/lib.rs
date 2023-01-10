@@ -1,4 +1,5 @@
 pub mod parser;
+pub mod solver;
 
 use std::collections::HashMap;
 
@@ -11,7 +12,6 @@ use parser::{
 pub struct Repl {
     inputs: Vec<(String, Option<i64>)>,
     asts: Vec<SyntaxTree>,
-    answers: Vec<Option<Vec<Tokens>>>,
     vars: Option<HashMap<String, SyntaxTree>>,
     functions: Option<HashMap<String, (SyntaxTree, usize)>>,
 }
@@ -21,7 +21,6 @@ impl Repl {
         Repl {
             inputs: vec![],
             asts: vec![],
-            answers: vec![],
             vars: vars.0,
             functions: functions.0,
         }
@@ -95,5 +94,9 @@ impl Repl {
 
     pub fn test_ast(input: String) {
         println!("{:#?}", Parser::parse_string(&input, None, None).unwrap().1);
+    }
+
+    pub fn test_multiply_fraction(input: String) {
+        println!("{:#?}", solver::Solver(Parser::parse_string(&input, None, None).unwrap().1).multiply_fraction())
     }
 }

@@ -118,7 +118,12 @@ impl Tokens {
                 '%' => Tokens::Modulo,
                 '!' => Tokens::Factorial,
                 '^' => Tokens::Power,
-                '(' => Tokens::ParenOpen,
+                '(' => {
+                    if matches!(symbols.last(), Some(token) if *token == Tokens::ParenClose) {
+                        symbols.push(Tokens::Multiply)
+                    }
+                    Tokens::ParenOpen
+                }
                 ')' => Tokens::ParenClose,
                 '=' => Tokens::Equals,
                 ',' => Tokens::ArgsSeparator,
@@ -150,7 +155,7 @@ impl Tokens {
                                         true,
                                     );
                                 } else if str == &key[..str.len()] {
-                                    return (str, None, true)
+                                    return (str, None, true);
                                 }
                             }
                         }
@@ -167,7 +172,7 @@ impl Tokens {
                                         true,
                                     );
                                 } else if str == &key[..str.len()] {
-                                    return (str, None, true)
+                                    return (str, None, true);
                                 }
                             }
                         }
@@ -183,7 +188,7 @@ impl Tokens {
                                     true,
                                 );
                             } else if str == &key[..str.len()] {
-                                return (str, None, true)
+                                return (str, None, true);
                             }
                         }
 
@@ -198,17 +203,20 @@ impl Tokens {
                         (str, token, starts) = funkyvars(str, functions, vars);
 
                         if let Some((true, token)) = token {
-                            if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                            if matches!(symbols.last(), Some(token) if !token.is_operator() && *token != Tokens::ParenOpen)
+                            {
                                 symbols.push(Tokens::Multiply);
                             }
                             break Some(token);
                         } else if let Some((false, token)) = token {
-                            if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                            if matches!(symbols.last(), Some(token) if !token.is_operator() && *token != Tokens::ParenOpen)
+                            {
                                 symbols.push(Tokens::Multiply);
                             }
                             symbols.push(token)
                         } else if !starts {
-                            if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                            if matches!(symbols.last(), Some(token) if !token.is_operator() && *token != Tokens::ParenOpen)
+                            {
                                 symbols.push(Tokens::Multiply);
                             }
                             symbols.push(Tokens::Var(str.remove(0).to_string()))
@@ -297,7 +305,7 @@ impl Tokens {
                                     true,
                                 );
                             } else if key.len() >= str.len() && str == &key[..str.len()] {
-                                return (str, None, true)
+                                return (str, None, true);
                             }
                         }
 
@@ -313,7 +321,7 @@ impl Tokens {
                                         true,
                                     );
                                 } else if key.len() >= str.len() && str == &key[..str.len()] {
-                                    return (str, None, true)
+                                    return (str, None, true);
                                 }
                             }
                         }
@@ -329,7 +337,7 @@ impl Tokens {
                                     true,
                                 );
                             } else if key.len() >= str.len() && str == &key[..str.len()] {
-                                return (str, None, true)
+                                return (str, None, true);
                             }
                         }
 
@@ -344,12 +352,14 @@ impl Tokens {
                         (str, token, starts) = funkyargs(str, functions, args);
 
                         if let Some((true, token)) = token {
-                            if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                            if matches!(symbols.last(), Some(token) if !token.is_operator() && *token != Tokens::ParenOpen)
+                            {
                                 symbols.push(Tokens::Multiply);
                             }
                             break Some(token);
                         } else if let Some((false, token)) = token {
-                            if matches!(symbols.last(), Some(token) if !token.is_operator()) {
+                            if matches!(symbols.last(), Some(token) if !token.is_operator() && *token != Tokens::ParenOpen)
+                            {
                                 symbols.push(Tokens::Multiply);
                             }
                             symbols.push(token)
@@ -415,9 +425,10 @@ impl Tokens {
 
     pub(crate) fn op_level(&self) -> usize {
         match self {
-            Tokens::Function(_) => 4,
-            Tokens::Power | Tokens::Factorial => 3,
-            Tokens::Multiply | Tokens::Divide | Tokens::Modulo => 2,
+            Tokens::Function(_) => 5,
+            Tokens::Power | Tokens::Factorial => 4,
+            Tokens::Divide => 3,
+            Tokens::Multiply | Tokens::Modulo => 2,
             Tokens::Plus | Tokens::Minus => 1,
             _ => 0,
         }

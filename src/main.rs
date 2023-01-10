@@ -7,7 +7,10 @@ fn main() {
         Repl::test_tokens(args[2].to_string())
     } else if args.len() > 2 && args[1] == "-s" {
         Repl::test_ast(args[2].to_string())
-    } else {
+    } else if args.len() > 2 && args[1] == "-f" {
+        Repl::test_multiply_fraction(args[2].to_string())
+    }
+    else {
         let mut repl = Repl::new(ast::Vars::none(), ast::Functions::none());
         for i in 1..args.len() {
             print!("{:?} ", repl.input(args[i].to_string()));
